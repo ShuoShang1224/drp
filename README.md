@@ -32,7 +32,7 @@ Run the example inference script, which launches an interactive DRP GUI:
 python drp/drp_inference.py
 ```
 
-https://github.com/user-attachments/assets/271c2f7d-a73e-4e08-b7d2-8a2734ad0ba9
+https://github.com/user-attachments/assets/1074ddb1-2c5c-4470-bf86-3023c83b84ea
 
 ## Citation
 If you find this codebase useful in your research, please cite:

@@ -1,0 +1,32 @@
+# Python
+*.egg-info/
+__pycache__/
+
+# hydra
+outputs/
+*.log
+.hydra/
+
+# Training artifacts
+checkpoints/
+runs/
+logs/
+*.pt
+*.pth
+*.ckpt
+wandb/
+.wandb
+tensorboard/
+lightning_logs/
+runs_dagger/
+eval/
+
+# OS generated files
+.DS_Store
+
+# Data
+data/
+
+# VSCode
+.vscode/
+*.code-workspace

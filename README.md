@@ -1,6 +1,8 @@
 # DRP Pre-release
-
 This repository contains the pre-release version of DRP: Deep Reactive Policy, with the IMPACT model and checkpoints.
+
+`Note:` We will be adding a lot more features and examples for the full release, aiming to be released sometime in June 2026. Stay tuned!
+
 
 ## Installation
 

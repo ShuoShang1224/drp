@@ -23,6 +23,13 @@ except ImportError:
     Usd = None
     UsdGeom = None
 
+try:
+    import viser
+    from viser.extras import ViserUrdf
+except ImportError:
+    viser = None
+    ViserUrdf = None
+
 
 @dataclass
 class TrialResult:
@@ -31,10 +38,195 @@ class TrialResult:
     success: bool
     reason: str
     steps: int
-    final_joint_error_l2: float
+    final_joint_error_l1: float
     final_eef_error_m: float
     min_clearance_m: float
     runtime_s: float
+
+
+@dataclass
+class ObstacleBox:
+    center: torch.Tensor
+    axes: torch.Tensor
+    half_extents: torch.Tensor
+
+
+@dataclass
+class ObstacleScene:
+    obstacle_pcd: torch.Tensor
+    boxes: List[ObstacleBox]
+
+
+class RolloutVisualizer:
+    def __init__(self, policy: DRPInference, robot_points: int):
+        if viser is None or ViserUrdf is None:
+            raise RuntimeError("viser is required for --visualize mode")
+
+        self.policy = policy
+        self.robot_points = robot_points
+        self.server = viser.ViserServer()
+        self.server.gui.configure_theme(control_width="medium")
+        self.server.scene.add_frame(
+            "/WorldAxes", show_axes=True, axes_length=0.15, axes_radius=0.01, visible=True
+        )
+        self.server.scene.add_grid(
+            "/grid", width=10, height=10, position=(0.0, 0.0, 0.0), shadow_opacity=0.1
+        )
+
+        urdf_path = (
+            Path(__file__).resolve().parent
+            / "assets/urdf/franka_description/robots/franka_panda_gripper.urdf"
+        )
+        self.current_robot = ViserUrdf(
+            self.server,
+            urdf_or_path=urdf_path,
+            root_node_name="/current_robot",
+            load_meshes=True,
+            load_collision_meshes=False,
+        )
+        self.goal_robot = ViserUrdf(
+            self.server,
+            urdf_or_path=urdf_path,
+            root_node_name="/goal_robot",
+            load_meshes=True,
+            load_collision_meshes=False,
+        )
+
+        self.scene_handle = self.server.scene.add_point_cloud(
+            name="/scene_pcd",
+            points=np.zeros((0, 3), dtype=np.float16),
+            colors=(60, 170, 80),
+            point_size=0.006,
+            precision="float16",
+            visible=True,
+        )
+        self.current_robot_pcd_handle = self.server.scene.add_point_cloud(
+            name="/current_robot_pcd",
+            points=np.zeros((0, 3), dtype=np.float16),
+            colors=(0, 80, 255),
+            point_size=0.005,
+            precision="float16",
+            visible=True,
+        )
+        self.goal_robot_pcd_handle = self.server.scene.add_point_cloud(
+            name="/goal_robot_pcd",
+            points=np.zeros((0, 3), dtype=np.float16),
+            colors=(255, 120, 0),
+            point_size=0.005,
+            precision="float16",
+            visible=True,
+        )
+        self.current_eef_handle = self.server.scene.add_point_cloud(
+            name="/current_eef",
+            points=np.zeros((1, 3), dtype=np.float16),
+            colors=(0, 80, 255),
+            point_size=0.02,
+            precision="float16",
+            visible=True,
+        )
+        self.goal_eef_handle = self.server.scene.add_point_cloud(
+            name="/goal_eef",
+            points=np.zeros((1, 3), dtype=np.float16),
+            colors=(255, 120, 0),
+            point_size=0.02,
+            precision="float16",
+            visible=True,
+        )
+        self._obstacle_box_handles = []
+
+    def _ensure_obstacle_box_handles(self, count: int) -> None:
+        while len(self._obstacle_box_handles) < count:
+            idx = len(self._obstacle_box_handles)
+            handle = self.server.scene.add_box(
+                name=f"/obstacle_boxes/box_{idx}",
+                dimensions=(0.01, 0.01, 0.01),
+                color=(120, 200, 120),
+                position=(0.0, 0.0, 0.0),
+                wxyz=(1.0, 0.0, 0.0, 0.0),
+                visible=False,
+            )
+            try:
+                handle.opacity = 0.18
+            except Exception:
+                pass
+            self._obstacle_box_handles.append(handle)
+
+    def _update_obstacle_boxes(self, obstacle_scene: "ObstacleScene") -> None:
+        self._ensure_obstacle_box_handles(len(obstacle_scene.boxes))
+        for idx, box in enumerate(obstacle_scene.boxes):
+            rotation = box.axes.detach().cpu().numpy().T.astype(np.float32, copy=False)
+            center = box.center.detach().cpu().numpy().astype(np.float32, copy=False)
+            dimensions = (
+                2.0 * box.half_extents.detach().cpu().numpy().astype(np.float32, copy=False)
+            )
+            handle = self._obstacle_box_handles[idx]
+            handle.position = tuple(float(v) for v in center)
+            handle.wxyz = tuple(float(v) for v in _rotation_matrix_to_wxyz(rotation))
+            try:
+                handle.dimensions = tuple(float(v) for v in dimensions)
+            except Exception:
+                pass
+            handle.visible = True
+        for handle in self._obstacle_box_handles[len(obstacle_scene.boxes):]:
+            handle.visible = False
+
+    @staticmethod
+    def _make_vis_cfg(joint_names: List[str], q: np.ndarray, gripper_width: float = 0.04) -> np.ndarray:
+        cfg = np.zeros(len(joint_names), dtype=np.float32)
+        name_to_idx = {name: i for i, name in enumerate(joint_names)}
+        for i, value in enumerate(np.asarray(q, dtype=np.float32).reshape(7), start=1):
+            idx = name_to_idx.get(f"panda_joint{i}")
+            if idx is not None:
+                cfg[idx] = float(value)
+        if "panda_finger_joint1" in name_to_idx:
+            cfg[name_to_idx["panda_finger_joint1"]] = gripper_width
+        return cfg
+
+    @staticmethod
+    def _to_vis_points(points: np.ndarray) -> np.ndarray:
+        return np.asarray(points, dtype=np.float32).astype(np.float16, copy=False)
+
+    def update(
+        self,
+        trial_id: int,
+        direction_tag: str,
+        step: int,
+        joint_pos: torch.Tensor,
+        goal_joint_pos: torch.Tensor,
+        obstacle_pcd: torch.Tensor,
+        obstacle_scene: Optional["ObstacleScene"],
+        current_robot_pcd: torch.Tensor,
+        clearance: float,
+        status: str,
+    ) -> None:
+        current_q = joint_pos[0].detach().cpu().numpy()
+        goal_q = goal_joint_pos[0].detach().cpu().numpy()
+        goal_robot_pcd = self.policy._fk_sampler.sample(goal_joint_pos, self.robot_points)[0]
+        current_eef = self.policy._fk_sampler.end_effector_pose(joint_pos)[0, :3, 3]
+        goal_eef = self.policy._fk_sampler.end_effector_pose(goal_joint_pos)[0, :3, 3]
+
+        self.current_robot.update_cfg(
+            self._make_vis_cfg(self.current_robot.get_actuated_joint_names(), current_q)
+        )
+        self.goal_robot.update_cfg(
+            self._make_vis_cfg(self.goal_robot.get_actuated_joint_names(), goal_q)
+        )
+        self.scene_handle.points = self._to_vis_points(obstacle_pcd.detach().cpu().numpy())
+        if obstacle_scene is not None:
+            self._update_obstacle_boxes(obstacle_scene)
+        self.current_robot_pcd_handle.points = self._to_vis_points(current_robot_pcd.detach().cpu().numpy())
+        self.goal_robot_pcd_handle.points = self._to_vis_points(goal_robot_pcd.detach().cpu().numpy())
+        self.current_eef_handle.points = self._to_vis_points(
+            current_eef.detach().cpu().numpy().reshape(1, 3)
+        )
+        self.goal_eef_handle.points = self._to_vis_points(
+            goal_eef.detach().cpu().numpy().reshape(1, 3)
+        )
+
+        print(
+            f"[visualize] trial={trial_id} tag={direction_tag} "
+            f"step={step} clearance={clearance:.4f}m status={status}"
+        )
 
 
 def _parse_float_list(text: str, expected_len: int, name: str) -> np.ndarray:
@@ -60,6 +252,52 @@ def _box_surface_points(center: np.ndarray, half_extents: np.ndarray, n: int, de
     return pts + center_t
 
 
+def _make_obstacle_box(
+    center: np.ndarray,
+    half_extents: np.ndarray,
+    device: torch.device,
+    axes: Optional[np.ndarray] = None,
+) -> ObstacleBox:
+    if axes is None:
+        axes = np.eye(3, dtype=np.float32)
+    return ObstacleBox(
+        center=torch.as_tensor(center, device=device, dtype=torch.float32),
+        axes=torch.as_tensor(axes, device=device, dtype=torch.float32),
+        half_extents=torch.as_tensor(half_extents, device=device, dtype=torch.float32),
+    )
+
+
+def _rotation_matrix_to_wxyz(rotation: np.ndarray) -> np.ndarray:
+    trace = float(rotation[0, 0] + rotation[1, 1] + rotation[2, 2])
+    if trace > 0.0:
+        s = np.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * s
+        x = (rotation[2, 1] - rotation[1, 2]) / s
+        y = (rotation[0, 2] - rotation[2, 0]) / s
+        z = (rotation[1, 0] - rotation[0, 1]) / s
+    elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
+        s = np.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
+        w = (rotation[2, 1] - rotation[1, 2]) / s
+        x = 0.25 * s
+        y = (rotation[0, 1] + rotation[1, 0]) / s
+        z = (rotation[0, 2] + rotation[2, 0]) / s
+    elif rotation[1, 1] > rotation[2, 2]:
+        s = np.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
+        w = (rotation[0, 2] - rotation[2, 0]) / s
+        x = (rotation[0, 1] + rotation[1, 0]) / s
+        y = 0.25 * s
+        z = (rotation[1, 2] + rotation[2, 1]) / s
+    else:
+        s = np.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
+        w = (rotation[1, 0] - rotation[0, 1]) / s
+        x = (rotation[0, 2] + rotation[2, 0]) / s
+        y = (rotation[1, 2] + rotation[2, 1]) / s
+        z = 0.25 * s
+    quat = np.asarray([w, x, y, z], dtype=np.float32)
+    quat /= np.linalg.norm(quat)
+    return quat
+
+
 def _build_scene_obstacle_pcd(
     device: torch.device,
     table_points: int,
@@ -68,7 +306,7 @@ def _build_scene_obstacle_pcd(
     box_half_extents: np.ndarray,
     box_jitter_xy: float,
     rng: np.random.Generator,
-) -> torch.Tensor:
+) -> ObstacleScene:
     center = box_center.copy()
     if box_jitter_xy > 0:
         center[:2] += rng.uniform(-box_jitter_xy, box_jitter_xy, size=2).astype(np.float32)
@@ -79,7 +317,18 @@ def _build_scene_obstacle_pcd(
     table[:, 2] = 0.02
 
     box = _box_surface_points(center, box_half_extents, box_points, device)
-    return torch.cat((table, box), dim=0)
+    obstacle_pcd = torch.cat((table, box), dim=0)
+    table_box = _make_obstacle_box(
+        center=np.asarray([0.7, 0.0, 0.01], dtype=np.float32),
+        half_extents=np.asarray([0.5, 0.6, 0.01], dtype=np.float32),
+        device=device,
+    )
+    obstacle_box = _make_obstacle_box(
+        center=center,
+        half_extents=box_half_extents,
+        device=device,
+    )
+    return ObstacleScene(obstacle_pcd=obstacle_pcd, boxes=[table_box, obstacle_box])
 
 
 def _demo_index_from_key(demo_key: str) -> int:
@@ -108,7 +357,7 @@ def _load_scene_obstacle_pcd_from_usd(
     device: torch.device,
     total_points: int,
     rng: np.random.Generator,
-) -> torch.Tensor:
+) -> ObstacleScene:
     if Usd is None or UsdGeom is None:
         raise RuntimeError("pxr is required for USD parsing but is not available")
 
@@ -131,6 +380,7 @@ def _load_scene_obstacle_pcd_from_usd(
     points_per_cube = max(64, int(np.ceil(total_points / len(obstacle_cubes))))
 
     parts = []
+    boxes = []
     for prim in obstacle_cubes:
         cube = UsdGeom.Cube(prim)
         size = cube.GetSizeAttr().Get()
@@ -141,6 +391,20 @@ def _load_scene_obstacle_pcd_from_usd(
         matrix = np.array(xform_cache.GetLocalToWorldTransform(prim), dtype=np.float32)
         world_pts = local_pts @ matrix[:3, :3] + matrix[3, :3]
         parts.append(world_pts)
+        row_axes = matrix[:3, :3]
+        axis_lengths = np.linalg.norm(row_axes, axis=1)
+        if np.any(axis_lengths <= 1e-8):
+            raise RuntimeError(f"Degenerate cube transform in scene: {scene_path}")
+        unit_axes = row_axes / axis_lengths[:, None]
+        half_extents = 0.5 * float(size) * axis_lengths
+        boxes.append(
+            _make_obstacle_box(
+                center=matrix[3, :3],
+                half_extents=half_extents.astype(np.float32),
+                axes=unit_axes.astype(np.float32),
+                device=device,
+            )
+        )
 
     obstacle_pts = np.concatenate(parts, axis=0)
 
@@ -151,11 +415,14 @@ def _load_scene_obstacle_pcd_from_usd(
         indices = rng.choice(obstacle_pts.shape[0], size=total_points, replace=True)
         obstacle_pts = obstacle_pts[indices]
 
-    return torch.as_tensor(obstacle_pts, device=device, dtype=torch.float32)
+    return ObstacleScene(
+        obstacle_pcd=torch.as_tensor(obstacle_pts, device=device, dtype=torch.float32),
+        boxes=boxes,
+    )
 
 
-def _joint_error_l2(q: torch.Tensor, q_goal: torch.Tensor) -> float:
-    return float(torch.linalg.norm(q - q_goal, dim=1).item())
+def _joint_error_l1(q: torch.Tensor, q_goal: torch.Tensor) -> float:
+    return float(torch.abs(q - q_goal).sum(dim=1).item())
 
 
 def _eef_error_m(policy: DRPInference, q: torch.Tensor, q_goal: torch.Tensor) -> float:
@@ -164,9 +431,20 @@ def _eef_error_m(policy: DRPInference, q: torch.Tensor, q_goal: torch.Tensor) ->
     return float(torch.linalg.norm(eef - eef_goal).item())
 
 
-def _pointcloud_clearance_m(robot_pcd: torch.Tensor, obstacle_pcd: torch.Tensor) -> float:
-    dists = torch.cdist(robot_pcd.unsqueeze(0), obstacle_pcd.unsqueeze(0))
-    return float(dists.amin().item())
+def _box_signed_distance(points: torch.Tensor, box: ObstacleBox) -> torch.Tensor:
+    local_points = (points - box.center) @ box.axes.T
+    q = torch.abs(local_points) - box.half_extents
+    outside = torch.linalg.norm(torch.clamp(q, min=0.0), dim=1)
+    inside = torch.clamp(q.amax(dim=1), max=0.0)
+    return outside + inside
+
+
+def _scene_clearance_m(robot_pcd: torch.Tensor, obstacle_scene: ObstacleScene) -> float:
+    if not obstacle_scene.boxes:
+        return float("inf")
+    sdf_values = [_box_signed_distance(robot_pcd, box) for box in obstacle_scene.boxes]
+    union_sdf = torch.stack(sdf_values, dim=0).amin(dim=0)
+    return float(union_sdf.amin().item())
 
 
 def _choose_start_goal(
@@ -196,12 +474,14 @@ def _run_trial(
     policy: DRPInference,
     start_q_np: np.ndarray,
     goal_q_np: np.ndarray,
-    obstacle_pcd: torch.Tensor,
+    obstacle_scene: ObstacleScene,
     args: argparse.Namespace,
     trial_id: int,
     direction_tag: str,
+    visualizer: Optional[RolloutVisualizer] = None,
 ) -> TrialResult:
     device = policy.device
+    obstacle_pcd = obstacle_scene.obstacle_pcd
     joint_pos = torch.as_tensor(start_q_np, device=device, dtype=torch.float32).unsqueeze(0)
     goal_joint_pos = torch.as_tensor(goal_q_np, device=device, dtype=torch.float32).unsqueeze(0)
     max_step = torch.full_like(joint_pos, args.max_joint_step)
@@ -211,8 +491,23 @@ def _run_trial(
 
     with torch.inference_mode():
         start_robot_pcd = policy._fk_sampler.sample(joint_pos, args.collision_robot_points)[0]
-        clearance = _pointcloud_clearance_m(start_robot_pcd, obstacle_pcd)
+        clearance = _scene_clearance_m(start_robot_pcd, obstacle_scene)
         min_clearance = min(min_clearance, clearance)
+        if visualizer is not None:
+            visualizer.update(
+                trial_id=trial_id,
+                direction_tag=direction_tag,
+                step=0,
+                joint_pos=joint_pos,
+                goal_joint_pos=goal_joint_pos,
+                obstacle_pcd=obstacle_pcd,
+                obstacle_scene=obstacle_scene,
+                current_robot_pcd=start_robot_pcd,
+                clearance=clearance,
+                status="start",
+            )
+            if args.visualize_step_sleep > 0:
+                time.sleep(args.visualize_step_sleep)
         if clearance < args.collision_threshold:
             return TrialResult(
                 trial_id=trial_id,
@@ -220,7 +515,7 @@ def _run_trial(
                 success=False,
                 reason="start_in_collision",
                 steps=0,
-                final_joint_error_l2=_joint_error_l2(joint_pos, goal_joint_pos),
+                final_joint_error_l1=_joint_error_l1(joint_pos, goal_joint_pos),
                 final_eef_error_m=_eef_error_m(policy, joint_pos, goal_joint_pos),
                 min_clearance_m=min_clearance,
                 runtime_s=time.perf_counter() - start_time,
@@ -237,8 +532,23 @@ def _run_trial(
             joint_pos, _ = clamp_to_franka_limits(joint_pos)
 
             robot_pcd = policy._fk_sampler.sample(joint_pos, args.collision_robot_points)[0]
-            clearance = _pointcloud_clearance_m(robot_pcd, obstacle_pcd)
+            clearance = _scene_clearance_m(robot_pcd, obstacle_scene)
             min_clearance = min(min_clearance, clearance)
+            if visualizer is not None:
+                visualizer.update(
+                    trial_id=trial_id,
+                    direction_tag=direction_tag,
+                    step=step,
+                    joint_pos=joint_pos,
+                    goal_joint_pos=goal_joint_pos,
+                    obstacle_pcd=obstacle_pcd,
+                    obstacle_scene=obstacle_scene,
+                    current_robot_pcd=robot_pcd,
+                    clearance=clearance,
+                    status="running",
+                )
+                if args.visualize_step_sleep > 0:
+                    time.sleep(args.visualize_step_sleep)
 
             if clearance < args.collision_threshold:
                 return TrialResult(
@@ -247,13 +557,13 @@ def _run_trial(
                     success=False,
                     reason="collision",
                     steps=step,
-                    final_joint_error_l2=_joint_error_l2(joint_pos, goal_joint_pos),
+                    final_joint_error_l1=_joint_error_l1(joint_pos, goal_joint_pos),
                     final_eef_error_m=_eef_error_m(policy, joint_pos, goal_joint_pos),
                     min_clearance_m=min_clearance,
                     runtime_s=time.perf_counter() - start_time,
                 )
 
-            joint_err = _joint_error_l2(joint_pos, goal_joint_pos)
+            joint_err = _joint_error_l1(joint_pos, goal_joint_pos)
             if joint_err <= args.goal_tolerance:
                 return TrialResult(
                     trial_id=trial_id,
@@ -261,7 +571,7 @@ def _run_trial(
                     success=True,
                     reason="success",
                     steps=step,
-                    final_joint_error_l2=joint_err,
+                    final_joint_error_l1=joint_err,
                     final_eef_error_m=_eef_error_m(policy, joint_pos, goal_joint_pos),
                     min_clearance_m=min_clearance,
                     runtime_s=time.perf_counter() - start_time,
@@ -273,7 +583,7 @@ def _run_trial(
         success=False,
         reason="timeout",
         steps=args.max_steps,
-        final_joint_error_l2=_joint_error_l2(joint_pos, goal_joint_pos),
+        final_joint_error_l1=_joint_error_l1(joint_pos, goal_joint_pos),
         final_eef_error_m=_eef_error_m(policy, joint_pos, goal_joint_pos),
         min_clearance_m=min_clearance,
         runtime_s=time.perf_counter() - start_time,
@@ -288,6 +598,7 @@ def _run_synthetic_trials(
     config_2: np.ndarray,
     box_center: np.ndarray,
     box_half_extents: np.ndarray,
+    visualizer: Optional[RolloutVisualizer],
 ) -> List[TrialResult]:
     results: List[TrialResult] = []
 
@@ -307,7 +618,7 @@ def _run_synthetic_trials(
             goal_q = goal_q + rng.normal(0.0, args.goal_noise_std, size=7).astype(np.float32)
             goal_q, _ = clamp_to_franka_limits(goal_q)
 
-        obstacle_pcd = _build_scene_obstacle_pcd(
+        obstacle_scene = _build_scene_obstacle_pcd(
             device=policy.device,
             table_points=args.table_points,
             box_points=args.box_points,
@@ -321,10 +632,11 @@ def _run_synthetic_trials(
             policy=policy,
             start_q_np=np.asarray(start_q, dtype=np.float32),
             goal_q_np=np.asarray(goal_q, dtype=np.float32),
-            obstacle_pcd=obstacle_pcd,
+            obstacle_scene=obstacle_scene,
             args=args,
             trial_id=trial,
             direction_tag=direction_tag,
+            visualizer=visualizer if args.visualize and trial == args.visualize_trial else None,
         )
         results.append(result)
 
@@ -348,6 +660,7 @@ def _run_dataset_trials(
     dataset_hdf5: Path,
     saved_scenes_dir: Path,
     scene_prefix: str,
+    visualizer: Optional[RolloutVisualizer],
 ) -> Tuple[List[TrialResult], Dict[str, int]]:
     if h5py is None:
         raise RuntimeError("h5py is required for --dataset-hdf5 mode")
@@ -358,7 +671,7 @@ def _run_dataset_trials(
         raise FileNotFoundError(f"Saved scenes directory not found: {saved_scenes_dir}")
 
     results: List[TrialResult] = []
-    scene_cache: Dict[int, torch.Tensor] = {}
+    scene_cache: Dict[int, ObstacleScene] = {}
     missing_scene_count = 0
     parse_failed_scene_count = 0
 
@@ -389,8 +702,8 @@ def _run_dataset_trials(
         print(f"Demo groups           : {len(demo_keys)}")
         print(f"Total start-goal pairs: {total_pairs}")
         print(f"Max steps / trial     : {args.max_steps}")
-        print(f"Goal tolerance (L2)   : {args.goal_tolerance:.4f} rad")
-        print(f"Collision threshold   : {args.collision_threshold:.4f} m")
+        print(f"Goal tolerance (L1)   : {args.goal_tolerance:.4f} rad")
+        print(f"SDF collision thresh  : {args.collision_threshold:.4f} m")
         print(f"USD obstacle points   : {args.usd_obstacle_points}")
         print("=" * 80)
 
@@ -435,10 +748,11 @@ def _run_dataset_trials(
                     policy=policy,
                     start_q_np=np.asarray(start_q, dtype=np.float32),
                     goal_q_np=np.asarray(goal_q, dtype=np.float32),
-                    obstacle_pcd=scene_cache[demo_idx],
+                    obstacle_scene=scene_cache[demo_idx],
                     args=args,
                     trial_id=trial_id,
                     direction_tag=f"{demo_key}/pair_{pair_idx}",
+                    visualizer=visualizer if args.visualize and trial_id == args.visualize_trial else None,
                 )
                 results.append(result)
                 trial_id += 1
@@ -480,7 +794,7 @@ def _summarize(results: List[TrialResult]) -> dict:
         "failure_breakdown": dict(reasons),
         "avg_steps_success": float(np.mean([r.steps for r in success_results])) if success_results else None,
         "avg_runtime_s": float(np.mean([r.runtime_s for r in results])),
-        "avg_final_joint_error_l2": float(np.mean([r.final_joint_error_l2 for r in results])),
+        "avg_final_joint_error_l1": float(np.mean([r.final_joint_error_l1 for r in results])),
         "avg_final_eef_error_m": float(np.mean([r.final_eef_error_m for r in results])),
         "avg_min_clearance_m": float(np.mean([r.min_clearance_m for r in results])),
         "min_clearance_m": float(np.min([r.min_clearance_m for r in results])),
@@ -535,7 +849,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--usd-obstacle-points",
         type=int,
-        default=6000,
+        default=2048,
         help="Number of obstacle points sampled from each USD scene for collision checks.",
     )
     parser.add_argument("--num-trials", type=int, default=100, help="Number of rollout trials.")
@@ -550,19 +864,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--goal-tolerance",
         type=float,
         default=0.08,
-        help="Success threshold on joint L2 distance to goal (rad).",
+        help="Success threshold on joint L1 distance to goal (rad).",
     )
     parser.add_argument(
         "--collision-threshold",
         type=float,
         default=0.008,
-        help="Collision threshold in meters using pointcloud clearance.",
+        help="Collision threshold in meters using obstacle SDF clearance.",
     )
     parser.add_argument(
         "--collision-robot-points",
         type=int,
-        default=512,
-        help="Number of robot points sampled for pointcloud collision checking.",
+        default=1024,
+        help="Number of robot points sampled for SDF collision checking.",
     )
     parser.add_argument(
         "--direction",
@@ -643,6 +957,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional output JSON path for summary and per-trial results.",
     )
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Visualize one selected rollout in Viser while the evaluation runs.",
+    )
+    parser.add_argument(
+        "--visualize-trial",
+        type=int,
+        default=1,
+        help="1-based global rollout index to visualize.",
+    )
+    parser.add_argument(
+        "--visualize-step-sleep",
+        type=float,
+        default=0.05,
+        help="Sleep in seconds after each visualized step to make motion observable.",
+    )
+    parser.add_argument(
+        "--visualize-hold",
+        action="store_true",
+        help="Keep the Viser server alive after evaluation; exit with Ctrl+C.",
+    )
     return parser
 
 
@@ -659,6 +995,12 @@ def main() -> None:
         raise ValueError("--max-demos must be >= 0")
     if args.max_pairs_per_demo < 0:
         raise ValueError("--max-pairs-per-demo must be >= 0")
+    if args.visualize_trial <= 0:
+        raise ValueError("--visualize-trial must be > 0")
+    if args.visualize_step_sleep < 0:
+        raise ValueError("--visualize-step-sleep must be >= 0")
+    if args.visualize_hold and not args.visualize:
+        raise ValueError("--visualize-hold requires --visualize")
 
     use_dataset_mode = bool(args.dataset_hdf5)
     if not use_dataset_mode and args.num_trials <= 0:
@@ -675,15 +1017,23 @@ def main() -> None:
 
     device = _resolve_device(args.device)
     policy = DRPInference(device=device)
+    visualizer = (
+        RolloutVisualizer(policy=policy, robot_points=args.collision_robot_points)
+        if args.visualize
+        else None
+    )
 
     print("=" * 80)
     print("DRP batch success-rate evaluation")
     print(f"Device                : {device}")
     print(f"Max steps / trial     : {args.max_steps}")
-    print(f"Goal tolerance (L2)   : {args.goal_tolerance:.4f} rad")
-    print(f"Collision threshold   : {args.collision_threshold:.4f} m")
+    print(f"Goal tolerance (L1)   : {args.goal_tolerance:.4f} rad")
+    print(f"SDF collision thresh  : {args.collision_threshold:.4f} m")
     print(f"Seed                  : {args.seed}")
     print(f"Mode                  : {'dataset_usd' if use_dataset_mode else 'synthetic'}")
+    print(f"Visualize             : {args.visualize}")
+    if args.visualize:
+        print(f"Visualize trial       : {args.visualize_trial}")
     print("=" * 80)
 
     begin = time.perf_counter()
@@ -701,6 +1051,7 @@ def main() -> None:
             dataset_hdf5=dataset_hdf5,
             saved_scenes_dir=saved_scenes_dir,
             scene_prefix=scene_prefix,
+            visualizer=visualizer,
         )
     else:
         config_1 = _parse_float_list(args.config1, expected_len=7, name="--config1")
@@ -721,12 +1072,16 @@ def main() -> None:
             config_2=config_2,
             box_center=box_center,
             box_half_extents=box_half_extents,
+            visualizer=visualizer,
         )
 
     total_runtime = time.perf_counter() - begin
 
     if not results:
         raise RuntimeError("No valid trials were executed. Please check dataset paths and scene files.")
+
+    if args.visualize and not any(r.trial_id == args.visualize_trial for r in results):
+        print(f"[warn] requested visualize trial {args.visualize_trial} was not executed.")
 
     summary = _summarize(results)
     summary["total_runtime_s"] = total_runtime
@@ -739,7 +1094,7 @@ def main() -> None:
     print(f"Success / Total       : {summary['success_count']} / {summary['total_trials']}")
     print(f"Failure breakdown     : {summary['failure_breakdown']}")
     print(f"Avg success steps     : {summary['avg_steps_success']}")
-    print(f"Avg final joint err   : {summary['avg_final_joint_error_l2']:.4f} rad")
+    print(f"Avg final joint err   : {summary['avg_final_joint_error_l1']:.4f} rad")
     print(f"Avg final eef err     : {summary['avg_final_eef_error_m']:.4f} m")
     print(f"Avg min clearance     : {summary['avg_min_clearance_m']:.4f} m")
     print(f"Min clearance         : {summary['min_clearance_m']:.4f} m")
@@ -756,6 +1111,11 @@ def main() -> None:
         }
         output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"Saved detailed results to: {output_path}")
+
+    if args.visualize_hold and visualizer is not None:
+        print("Visualizer hold is enabled. Press Ctrl+C to exit.")
+        while True:
+            time.sleep(1.0)
 
 
 if __name__ == "__main__":

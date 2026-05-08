@@ -1,0 +1,161 @@
+{
+  "urdf": "/home/hanyu/drp/drp/arm_v9/urdf/arm_v9.urdf",
+  "meshes_dir": "/home/hanyu/drp/drp/arm_v9/meshes",
+  "base_cache_dir": "/home/hanyu/drp/drp/utils/pcd_cache/copy",
+  "output_dir": "/home/hanyu/drp/drp/utils/pcd_cache/arm_v9_generated",
+  "attachment_full_points": 4096,
+  "generated_fixed_caches": [
+    1024,
+    4096
+  ],
+  "attachments": {
+    "Link5_lidar.STL": {
+      "semantic_link": "panda_link5",
+      "parent_joint": "Joint45",
+      "attachment_joint": "Joint5_lidar",
+      "description": "shared-parent transform from Link4",
+      "source_mesh": "/home/hanyu/drp/drp/arm_v9/meshes/Link5_lidar.STL",
+      "sampled_points": 4096,
+      "attachment_in_arm_link_frame": [
+        [
+          1.0,
+          -1.862645149230957e-09,
+          1.862645149230957e-09,
+          9.313225746154785e-10
+        ],
+        [
+          -1.862645149230957e-09,
+          1.0,
+          2.9802322387695312e-08,
+          1.4901161193847656e-08
+        ],
+        [
+          -1.862645149230957e-09,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    "Link6_lidar.STL": {
+      "semantic_link": "panda_link6",
+      "parent_joint": "Joint56",
+      "attachment_joint": "Joint6_lidar",
+      "description": "shared-parent transform from Link5",
+      "source_mesh": "/home/hanyu/drp/drp/arm_v9/meshes/Link6_lidar.STL",
+      "sampled_points": 4096,
+      "attachment_in_arm_link_frame": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          -1.4551915228366852e-11
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          -1.4551915228366852e-11
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          -5.820766091346741e-11
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    "Link7_lidar.STL": {
+      "semantic_link": "panda_link7",
+      "parent_joint": "Joint67",
+      "attachment_joint": "Joint7_lidar",
+      "description": "treated as Link7 attachment from shared parent Link6",
+      "source_mesh": "/home/hanyu/drp/drp/arm_v9/meshes/Link7_lidar.STL",
+      "sampled_points": 4096,
+      "attachment_in_arm_link_frame": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          -7.450580596923828e-09,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          7.450580596923828e-09,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  },
+  "semantic_link_counts": {
+    "panda_hand": {
+      "base_points": 237,
+      "augmented_points": 237
+    },
+    "panda_leftfinger": {
+      "base_points": 19,
+      "augmented_points": 19
+    },
+    "panda_link0": {
+      "base_points": 631,
+      "augmented_points": 631
+    },
+    "panda_link1": {
+      "base_points": 537,
+      "augmented_points": 537
+    },
+    "panda_link2": {
+      "base_points": 541,
+      "augmented_points": 541
+    },
+    "panda_link3": {
+      "base_points": 507,
+      "augmented_points": 507
+    },
+    "panda_link4": {
+      "base_points": 514,
+      "augmented_points": 514
+    },
+    "panda_link5": {
+      "base_points": 604,
+      "augmented_points": 4700
+    },
+    "panda_link6": {
+      "base_points": 329,
+      "augmented_points": 4425
+    },
+    "panda_link7": {
+      "base_points": 158,
+      "augmented_points": 4254
+    },
+    "panda_rightfinger": {
+      "base_points": 19,
+      "augmented_points": 19
+    }
+  }
+}

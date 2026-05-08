@@ -304,6 +304,145 @@
     <child link="right_gripper"/>
   </joint>
 
+  <link
+    name="Link5_lidar">
+
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/visual/Link5_lidar.STL" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/collusion/Link5_lidar.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint5_lidar" type="fixed">
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.8973" soft_upper_limit="2.8973"/>
+    <origin xyz="0 0 0" rpy="0 0 1.74533"/>
+    <parent link="panda_link5"/>
+    <child link="Link5_lidar"/>
+    <axis xyz="0 0 1"/>
+    <dynamics damping="10.0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+
+  <link
+    name="Link6_lidar">
+
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/visual/Link6_lidar.STL" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/collusion/Link6_lidar.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint6_lidar" type="fixed">
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.8973" soft_upper_limit="2.8973"/>
+    <origin xyz="0 0 0" rpy="0 0 -1.047197"/>
+    <parent link="panda_link6"/>
+    <child link="Link6_lidar"/>
+    <axis xyz="0 0 1"/>
+    <dynamics damping="10.0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+
+  <link
+    name="Link7_lidar">
+
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/visual/Link7_lidar.STL" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/collusion/Link7_lidar.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint7_lidar" type="fixed">
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.8973" soft_upper_limit="2.8973"/>
+    <origin xyz="0 0 0" rpy="0 0 -1.39626"/>
+    <parent link="panda_hand"/>
+    <child link="Link7_lidar"/>
+    <axis xyz="0 0 1"/>
+    <dynamics damping="10.0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
 </robot>
 
+<!-- <joint name="joint5_lidar" type="fixed">
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.8973" soft_upper_limit="2.8973"/>
+    <origin rpy="-1.57079632679 0 0" xyz="-0.0825 0.384 0"/>
+    <parent link="panda_link4"/>
+    <child link="Link5_lidar"/>
+    <axis xyz="0 0 1"/>
+    <dynamics damping="10.0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
 
+  <link
+    name="Link6_lidar">
+    <inertial>
+      <origin
+        xyz="0.0154328195253682 0.0846910439640339 0.0151302595053781"
+        rpy="0 0 0" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/visual/Link6_lidar.STL" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://franka_description/meshes/collusion/Link6_lidar.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint6_lidar" type="fixed">
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.8973" soft_upper_limit="2.8973"/>
+    <origin xyz="0 0 0" rpy="0 0 -1.5708"/>
+    <parent link="panda_link6"/>
+    <child link="Link6_lidar"/>
+    <axis xyz="0 0 1"/>
+    <dynamics damping="10.0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
